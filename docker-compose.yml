@@ -1,0 +1,21 @@
+networks:
+  bigdata-net:
+    driver: bridge
+
+services:
+  kdd-python:
+    image: python:3.11-slim
+    container_name: kdd-lab
+    hostname: kdd-lab
+    working_dir: /workspace/Practica_5075_Integridad_KDD
+    networks:
+      - bigdata-net
+    volumes:
+      - ./Practica_5075_Integridad_KDD:/workspace/Practica_5075_Integridad_KDD
+      - ./raw_batch_202611:/workspace/raw_batch_202611:ro
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "pip install --no-cache-dir pandas numpy &&
+      echo '[OK] Entorno Python 3.11 + Pandas/NumPy listo en /workspace/Practica_5075_Integridad_KDD' &&
+      sleep infinity"
