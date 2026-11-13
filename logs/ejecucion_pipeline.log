@@ -1,0 +1,25 @@
+2026-11-13 09:41:41 [INFO] === INICIO FASE 1: Pasarela de Integridad Criptográfica (SHA-256) ===
+2026-11-13 09:41:41 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_norte.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:41:41 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_sur.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:41:41 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_este.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:41:41 [INFO] Resumen Fase 1 -> Validados: 0 | Rechazados: 3
+2026-11-13 09:45:44 [INFO] === INICIO FASE 1: Pasarela de Integridad Criptográfica (SHA-256) ===
+2026-11-13 09:45:44 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_norte.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:45:44 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_sur.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:45:44 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_este.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:45:44 [INFO] Resumen Fase 1 -> Validados: 0 | Rechazados: 3
+2026-11-13 09:45:45 [INFO] === INICIO FASES 2 Y 3: Saneamiento, Coherencia y Perfilado KDD ===
+2026-11-13 09:45:45 [ERROR] No hay ficheros verificados en staging/ para procesar.
+2026-11-13 10:48:56 [INFO] === INICIO FASES 2 Y 3: Saneamiento, Coherencia y Perfilado KDD ===
+2026-11-13 10:48:56 [ERROR] No hay ficheros verificados en staging/ para procesar.
+2026-11-13 09:49:45 [INFO] === INICIO FASE 1: Pasarela de Integridad Criptográfica (SHA-256) ===
+2026-11-13 09:49:45 [INFO] [APROBADO] transacciones_tienda_norte.csv -> Integridad SHA-256 verificada con éxito.
+2026-11-13 09:49:45 [INFO] [APROBADO] transacciones_tienda_este.csv -> Integridad SHA-256 verificada con éxito.
+2026-11-13 09:49:45 [ERROR] [RECHAZADO - TAMPERED] transacciones_tienda_sur.csv -> Hash discrepante! Movido a quarantine/tampered/
+2026-11-13 09:49:45 [INFO] Resumen Fase 1 -> Validados: 2 | Rechazados: 1
+2026-11-13 09:49:46 [INFO] === INICIO FASES 2 Y 3: Saneamiento, Coherencia y Perfilado KDD ===
+2026-11-13 09:49:46 [INFO] Registros totales cargados desde staging: 100
+2026-11-13 09:49:46 [INFO] Dataset final saneado exportado a processed/dataset_kdd_listo.csv con 92 registros.
+2026-11-13 09:49:46 [INFO] Métricas de perfilado exportadas correctamente a output_samples/metricas_perfilado.json
+2026-11-13 09:49:46 [INFO] Informe técnico generado correctamente en reports/INFORME_CALIDAD_KDD.md
+2026-11-13 09:49:46 [INFO] === FIN DEL PIPELINE KDD Y PERFILADO EXITOSO ===

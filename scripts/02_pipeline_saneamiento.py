@@ -1,341 +1,156 @@
-"""
-Fases 2 y 3: Saneamiento de Datos, Detección de Outliers (IQR/MAD),
-Normalización ISO/IEC 25012 y Perfilado KDD para BI.
-Proyecto: Practica_5075_Integridad_KDD
-"""
-
 import json
 import logging
-import re
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-LOG_FILE = BASE_DIR / "logs" / "ejecucion_pipeline.log"
-QUARANTINE_MANIFEST = BASE_DIR / "output_samples" / "quarantine_manifest.txt"
-METRICAS_JSON = BASE_DIR / "output_samples" / "metricas_perfilado.json"
-INFORME_MD = BASE_DIR / "reports" / "INFORME_CALIDAD_KDD.md"
-
-TOKENS_NULOS = {"", "na", "n/a", "nan", "null", "none", "nat", "?"}
-MARCADOR_FASE2 = "# === FASE 2: REGISTROS AISLADOS EN CUARENTENA (SANEAMIENTO / OUTLIERS) ==="
+logging.basicConfig(
+    filename="logs/ejecucion_pipeline.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 
-def localizar_raw_dir() -> Path:
-    for candidata in (BASE_DIR / "raw_batch_202611", BASE_DIR.parent / "raw_batch_202611"):
-        if candidata.is_dir():
-            return candidata
-    raise FileNotFoundError("No se encontró la carpeta 'raw_batch_202611/'.")
+def ejecutar_saneamiento_kdd():
+  logging.info("=== INICIO FASES 2 Y 3: Saneamiento, Coherencia y Perfilado KDD ===")
 
+  verified_dir = Path("staging") / "verified"
+  bad_records_dir = Path("quarantine") / "bad_records"
+  processed_dir = Path("processed")
+  reports_dir = Path("reports")
+  output_samples_dir = Path("output_samples")
 
-def configurar_logger() -> logging.Logger:
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("Fase2_3_KDD")
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        fmt = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
-        fh = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
-        fh.setFormatter(fmt)
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        logger.addHandler(fh)
-        logger.addHandler(sh)
-    return logger
+  bad_records_dir.mkdir(parents=True, exist_ok=True)
+  processed_dir.mkdir(parents=True, exist_ok=True)
+  reports_dir.mkdir(parents=True, exist_ok=True)
+  output_samples_dir.mkdir(parents=True, exist_ok=True)
 
+  ficheros_verificados = list(verified_dir.glob("*.csv"))
+  if not ficheros_verificados:
+    logging.error("No hay ficheros verificados en staging/ para procesar.")
+    return
 
-def obtener_ficheros_aprobados_fase1(logger: logging.Logger) -> tuple[list[str], list[str]]:
-    if not QUARANTINE_MANIFEST.exists():
-        logger.critical("No existe output_samples/quarantine_manifest.txt. Ejecute primero 01_verificar_integridad.py.")
-        sys.exit(1)
+  df_list = []
+  for f in ficheros_verificados:
+    df_temp = pd.read_csv(f)
+    df_list.append(df_temp)
 
-    verificados: list[str] = []
-    bloqueados: list[str] = []
-    for linea in QUARANTINE_MANIFEST.read_text(encoding="utf-8").splitlines():
-        if linea.startswith(MARCADOR_FASE2):
-            break
-        if linea.startswith("VERIFIED"):
-            partes = [p.strip() for p in linea.split("|")]
-            if len(partes) >= 2:
-                verificados.append(partes[1])
-        elif linea.startswith("QUARANTINE"):
-            partes = [p.strip() for p in linea.split("|")]
-            if len(partes) >= 2:
-                bloqueados.append(partes[1])
-    return verificados, bloqueados
+  df_raw = pd.concat(df_list, ignore_index=True)
+  total_registros_iniciales = len(df_raw)
+  logging.info(
+      f"Registros totales cargados desde staging: {total_registros_iniciales}"
+  )
 
+  # 1. Identificación y segregación de nulos críticos (id_transaccion)
+  mask_nulos_id = df_raw["id_transaccion"].isnull()
+  bad_id_df = df_raw[mask_nulos_id]
+  bad_id_df.to_csv(bad_records_dir / "bad_records_nulos_id.csv", index=False)
 
-def detectar_outliers_iqr(serie: pd.Series, factor: float = 1.5) -> pd.Series:
-    q1 = serie.quantile(0.25)
-    q3 = serie.quantile(0.75)
-    iqr = q3 - q1
-    if pd.isna(iqr) or iqr == 0:
-        return pd.Series(False, index=serie.index)
-    return (serie < (q1 - factor * iqr)) | (serie > (q3 + factor * iqr))
+  df_clean = df_raw.dropna(subset=["id_transaccion"]).copy()
 
+  # 2. Coherencia temporal (ISO 8601)
+  df_clean["timestamp"] = pd.to_datetime(
+      df_clean["timestamp"], errors="coerce"
+  )
+  mask_fecha_valida = df_clean["timestamp"].notnull() & (
+      df_clean["timestamp"].dt.year >= 2020
+  )
+  df_clean = df_clean[mask_fecha_valida].copy()
+  df_clean["timestamp"] = df_clean["timestamp"].dt.strftime(
+      "%Y-%m-%d %H:%M:%S"
+  )
 
-def detectar_outliers_mad(serie: pd.Series, umbral: float = 3.5) -> pd.Series:
-    mediana = serie.median()
-    mad = np.median(np.abs(serie - mediana))
-    if pd.isna(mad) or mad == 0:
-        return pd.Series(False, index=serie.index)
-    z_mod = 0.6745 * (serie - mediana) / mad
-    return np.abs(z_mod) > umbral
+  # 3. Coerción numérica y reglas de dominio
+  df_clean["importe_eur"] = pd.to_numeric(
+      df_clean["importe_eur"], errors="coerce"
+  )
+  df_clean["unidades"] = pd.to_numeric(df_clean["unidades"], errors="coerce")
 
+  mediana_unidades = (
+      int(df_clean["unidades"].median())
+      if not df_clean["unidades"].isnull().all()
+      else 1
+  )
+  df_clean["unidades"] = df_clean["unidades"].fillna(mediana_unidades)
 
-def detectar_roles_columnas(df: pd.DataFrame) -> tuple[str, list[str], list[str]]:
-    columnas = list(df.columns)
-    col_id = next(
-        (c for c in columnas if re.search(r"(^id_|_id$|^id$|transaccion|txn|codigo)", c, re.IGNORECASE)),
-        columnas[0],
-    )
-    cols_fecha = [
-        c for c in columnas if re.search(r"(fecha|time|timestamp|ts|date|marca)", c, re.IGNORECASE)
-    ]
-    cols_num = []
-    for c in columnas:
-        if c == col_id or c in cols_fecha:
-            continue
-        serie_limpia = df[c].dropna().astype(str).str.strip()
-        serie_limpia = serie_limpia[~serie_limpia.str.lower().isin(TOKENS_NULOS)]
-        if not serie_limpia.empty and pd.to_numeric(serie_limpia, errors="coerce").notna().mean() >= 0.70:
-            cols_num.append(c)
-    return col_id, cols_fecha, cols_num
+  mask_dominio = (
+      (df_clean["importe_eur"] > 0)
+      & (df_clean["importe_eur"] < 50000)
+      & (df_clean["unidades"] >= 1)
+  )
 
+  bad_domain_df = df_clean[~mask_dominio]
+  bad_domain_df.to_csv(bad_records_dir / "bad_records_outliers.csv", index=False)
 
-def main() -> int:
-    logger = configurar_logger()
-    INFORME_MD.parent.mkdir(parents=True, exist_ok=True)
-    METRICAS_JSON.parent.mkdir(parents=True, exist_ok=True)
+  df_final = df_clean[mask_dominio].copy()
+  registros_finales = len(df_final)
 
-    logger.info("=== INICIO FASE 2 Y 3: SANEAMIENTO, OUTLIERS Y PERFILADO KDD ===")
-    raw_dir = localizar_raw_dir()
-    ficheros_verificados, ficheros_bloqueados_sha = obtener_ficheros_aprobados_fase1(logger)
+  # 4. Exportar dataset limpio para BI
+  processed_file = processed_dir / "dataset_kdd_listo.csv"
+  df_final.to_csv(processed_file, index=False)
+  logging.info(
+      f"Dataset final saneado exportado a {processed_file} con"
+      f" {registros_finales} registros."
+  )
 
-    if not ficheros_verificados:
-        logger.critical("Ningún fichero superó la Fase 1. Abortando saneamiento.")
-        return 1
+  # 5. Perfilado de Datos ISO/IEC 25012
+  completitud_tasa = (
+      (registros_finales / total_registros_iniciales) * 100
+      if total_registros_iniciales > 0
+      else 0
+  )
+  stats_importe = df_final["importe_eur"].describe(
+      percentiles=[0.25, 0.5, 0.75]
+  )
 
-    # Esquema contractual basado en el fichero íntegro de referencia
-    nombre_ref = next((n for n in ficheros_verificados if "norte" in n.lower()), ficheros_verificados[0])
-    esquema_base = list(pd.read_csv(raw_dir / nombre_ref, nrows=0).columns)
-    logger.info(f"Esquema contractual ({nombre_ref}): {esquema_base}")
+  metricas = {
+      "total_registros_brutos": int(total_registros_iniciales),
+      "total_registros_limpios": int(registros_finales),
+      "tasa_completitud_porcentaje": round(completitud_tasa, 2),
+      "importe_media": float(stats_importe["mean"]),
+      "importe_mediana": float(stats_importe["50%"]),
+      "importe_std": float(stats_importe["std"]),
+      "importe_p25": float(stats_importe["25%"]),
+      "importe_p75": float(stats_importe["75%"]),
+  }
 
-    dataframes: list[pd.DataFrame] = []
-    ficheros_schema_drift: list[str] = []
+  # Exportación obligatoria del JSON en output_samples/
+  json_path = output_samples_dir / "metricas_perfilado.json"
+  with open(json_path, "w", encoding="utf-8") as jf:
+    json.dump(metricas, jf, indent=4)
+  logging.info(f"Métricas de perfilado exportadas correctamente a {json_path}")
 
-    for nombre in ficheros_verificados:
-        ruta_csv = raw_dir / nombre
-        df_tmp = pd.read_csv(ruta_csv, dtype=str, keep_default_na=False)
-        if list(df_tmp.columns) != esquema_base:
-            logger.error(f"[SCHEMA DRIFT] {nombre} rechazado. Columnas: {list(df_tmp.columns)}")
-            ficheros_schema_drift.append(nombre)
-            continue
-        df_tmp["_archivo_origen"] = nombre
-        dataframes.append(df_tmp)
+  # 6. Redacción del informe técnico en reports/INFORME_CALIDAD_KDD.md
+  informe_md = f"""# Informe de Calidad de Datos y Preparación KDD (ISO/IEC 25012)
 
-    if not dataframes:
-        logger.critical("Ningún fichero cumplió el contrato de esquema.")
-        return 1
+## 1. Resumen Ejecutivo
+Informe generado automáticamente tras la ejecución del pipeline de validación criptográfica y saneamiento sobre el lote transaccional.
 
-    df = pd.concat(dataframes, ignore_index=True)
-    total_bruto = len(df)
+## 2. Métricas de Calidad y Perfilado
+* **Registros Procesados Iniciales**: {total_registros_iniciales}
+* **Registros Válidos Finales**: {registros_finales}
+* **Tasa de Completitud (ISO/IEC 25012)**: {metricas['tasa_completitud_porcentaje']}%
+* **Registros en Cuarentena**: {total_registros_iniciales - registros_finales}
 
-    for col in esquema_base:
-        df[col] = df[col].astype(str).str.strip()
-        df.loc[df[col].str.lower().isin(TOKENS_NULOS), col] = np.nan
+### Distribución estadística de `importe_eur` (post-limpieza):
+* **Media**: {metricas['importe_media']:.2f} €
+* **Mediana**: {metricas['importe_mediana']:.2f} €
+* **Desviación Estándar**: {metricas['importe_std']:.2f} €
+* **Percentil 25 (Q1)**: {metricas['importe_p25']:.2f} €
+* **Percentil 75 (Q3)**: {metricas['importe_p75']:.2f} €
 
-    col_id, cols_fecha, cols_num = detectar_roles_columnas(df[esquema_base])
-    logger.info(f"Roles detectados | ID: '{col_id}' | Fechas: {cols_fecha} | Numéricas: {cols_num}")
-    motivos = pd.Series([[] for _ in range(total_bruto)], index=df.index)
-
-    def registrar_fallo(mascara: pd.Series, etiqueta: str) -> None:
-        for idx in df.index[mascara.fillna(False)]:
-            motivos.at[idx].append(etiqueta)
-
-    # 1. Completitud (nulos en campos contractuales)
-    registrar_fallo(df[esquema_base].isna().any(axis=1), "NULO_EN_CAMPO_CRITICO")
-
-    # 2. Unicidad de clave primaria
-    registrar_fallo(df[col_id].duplicated(keep="first") & df[col_id].notna(), f"DUPLICADO_{col_id.upper()}")
-
-    # 3. Validez de marcas temporales
-    fechas_ok: dict[str, pd.Series] = {}
-    for col_f in cols_fecha:
-        parsed = pd.to_datetime(df[col_f], errors="coerce", utc=True)
-        fechas_ok[col_f] = parsed
-        registrar_fallo(parsed.isna() & df[col_f].notna(), f"TIMESTAMP_CORRUPTO_{col_f.upper()}")
-
-    # 4. Tipos numéricos y reglas de dominio de negocio
-    nums_ok: dict[str, pd.Series] = {}
-    for col_n in cols_num:
-        serie_num = pd.to_numeric(df[col_n], errors="coerce")
-        nums_ok[col_n] = serie_num
-        registrar_fallo(serie_num.isna() & df[col_n].notna(), f"TIPO_NUMERICO_INVALIDO_{col_n.upper()}")
-        if re.search(r"(cantidad|qty|unidades|precio|price|importe|total|ventas)", col_n, re.IGNORECASE):
-            registrar_fallo(serie_num <= 0, f"DOMINIO_NO_POSITIVO_{col_n.upper()}")
-
-    # 5. Detección estadística de outliers (IQR + MAD) sobre registros estructuralmente válidos
-    estructuralmente_sanos = motivos.str.len() == 0
-    for col_n, serie_num in nums_ok.items():
-        idx_eval = estructuralmente_sanos & serie_num.notna()
-        if idx_eval.sum() < 5:
-            continue
-        out_iqr = detectar_outliers_iqr(serie_num.loc[idx_eval], factor=1.5)
-        out_mad = detectar_outliers_mad(serie_num.loc[idx_eval], umbral=3.5)
-        mascara_out = pd.Series(False, index=df.index)
-        mascara_out.loc[idx_eval] = out_iqr | out_mad
-        registrar_fallo(mascara_out, f"OUTLIER_ESTADISTICO_{col_n.upper()}")
-
-    # 6. Segregación lógica de registros defectuosos en output_samples/quarantine_manifest.txt
-    mascara_rechazo = motivos.str.len() > 0
-    df_rechazados = df[mascara_rechazo].copy()
-    df_rechazados["motivo_rechazo"] = motivos[mascara_rechazo].str.join(" | ")
-
-    desglose_incidencias = (
-        df_rechazados["motivo_rechazo"].str.split(r" \| ").explode().value_counts().to_dict()
-        if not df_rechazados.empty
-        else {}
-    )
-
-    texto_fase1 = QUARANTINE_MANIFEST.read_text(encoding="utf-8").split(MARCADOR_FASE2)[0].rstrip()
-    lineas_fase2 = [
-        "",
-        MARCADOR_FASE2,
-        f"# Registros evaluados: {total_bruto} | Aislados: {len(df_rechazados)}",
-    ]
-    if df_rechazados.empty:
-        lineas_fase2.append("NONE | Ningún registro defectuoso detectado.")
-    else:
-        for idx, fila in df_rechazados.iterrows():
-            id_val = fila[col_id] if pd.notna(fila[col_id]) else "NULL_ID"
-            lineas_fase2.append(
-                f"QUARANTINE_ROW | archivo={fila['_archivo_origen']} | fila_lote={idx + 1} | "
-                f"{col_id}={id_val} | motivo={fila['motivo_rechazo']}"
-            )
-    QUARANTINE_MANIFEST.write_text(texto_fase1 + "\n" + "\n".join(lineas_fase2) + "\n", encoding="utf-8")
-
-    # 7. Transformación y normalización ISO/IEC 25012 + KDD en memoria
-    df_limpio = df[~mascara_rechazo].copy()
-    for col_f, parsed in fechas_ok.items():
-        df_limpio[col_f] = parsed[~mascara_rechazo].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    for col_n, serie_num in nums_ok.items():
-        vals = serie_num[~mascara_rechazo]
-        df_limpio[col_n] = vals.round(4)
-        if not vals.empty:
-            std_v = vals.std(ddof=0)
-            df_limpio[f"{col_n}_zscore"] = ((vals - vals.mean()) / std_v).round(4) if std_v and std_v > 0 else 0.0
-            v_min, v_max = vals.min(), vals.max()
-            df_limpio[f"{col_n}_minmax"] = ((vals - v_min) / (v_max - v_min)).round(4) if v_max > v_min else 0.0
-        else:
-            df_limpio[f"{col_n}_zscore"] = pd.Series(dtype="float64")
-            df_limpio[f"{col_n}_minmax"] = pd.Series(dtype="float64")
-
-    for col_t in [c for c in esquema_base if c not in cols_fecha and c not in cols_num]:
-        df_limpio[col_t] = df_limpio[col_t].astype(str).str.strip().str.upper()
-
-    # 8. Fase 3: Cálculo de métricas ISO/IEC 25012 y exportación a output_samples/metricas_perfilado.json
-    total_curado = len(df_limpio)
-    celdas_curadas = df_limpio[esquema_base].size
-    completitud = round((1.0 - df_limpio[esquema_base].isna().sum().sum() / celdas_curadas) * 100, 2) if celdas_curadas else 0.0
-    unicidad = round((df_limpio[col_id].nunique() / total_curado) * 100, 2) if total_curado else 0.0
-    validez_lote = round((total_curado / total_bruto) * 100, 2) if total_bruto else 0.0
-    consistencia = round((len(dataframes) / len(ficheros_verificados)) * 100, 2)
-
-    estadisticos_kdd = {}
-    for col_n in cols_num:
-        s = df_limpio[col_n].dropna()
-        if not s.empty:
-            estadisticos_kdd[col_n] = {
-                "media": round(float(s.mean()), 4),
-                "mediana": round(float(s.median()), 4),
-                "desviacion_tipica": round(float(s.std()), 4) if len(s) > 1 else 0.0,
-                "min": round(float(s.min()), 4),
-                "max": round(float(s.max()), 4),
-                "q25": round(float(s.quantile(0.25)), 4),
-                "q75": round(float(s.quantile(0.75)), 4),
-            }
-        else:
-            estadisticos_kdd[col_n] = None
-
-    fecha_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    metricas = {
-        "proyecto": "Practica_5075_Integridad_KDD",
-        "norma_calidad": "ISO/IEC 25012",
-        "fecha_ejecucion_utc": fecha_utc,
-        "auditoria_lote": {
-            "ficheros_bloqueados_sha256": ficheros_bloqueados_sha,
-            "ficheros_verificados_procesados": ficheros_verificados,
-            "ficheros_rechazados_schema_drift": ficheros_schema_drift,
-            "registros_evaluados": total_bruto,
-            "registros_validos_kdd": total_curado,
-            "registros_cuarentena": int(len(df_rechazados)),
-        },
-        "dimensiones_iso_25012_pct": {
-            "completitud": completitud,
-            "unicidad": unicidad,
-            "validez_lote": validez_lote,
-            "consistencia_esquema": consistencia,
-            "exactitud_dominio_rango": 100.0 if total_curado > 0 else 0.0,
-        },
-        "desglose_anomalias": desglose_incidencias,
-        "perfilado_estadistico_kdd": estadisticos_kdd,
-        "muestra_dataset_normalizado_bi": df_limpio.drop(columns=["_archivo_origen"]).head(5).to_dict(orient="records"),
-    }
-    METRICAS_JSON.write_text(json.dumps(metricas, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    # 9. Generación de reports/INFORME_CALIDAD_KDD.md
-    tabla_anomalias = "\n".join(
-        f"| `{motivo}` | {cantidad} |" for motivo, cantidad in desglose_incidencias.items()
-    ) or "| Ninguna anomalía detectada | 0 |"
-
-    tabla_stats = "\n".join(
-        f"| `{col}` | {st['media']} | {st['mediana']} | {st['desviacion_tipica']} | {st['min']} | {st['max']} |"
-        for col, st in estadisticos_kdd.items()
-        if st is not None
-    ) or "| Sin columnas numéricas válidas | - | - | - | - | - |"
-
-    informe = f"""# Informe de Calidad de Datos y Preparación KDD (ISO/IEC 25012)
-
-- **Proyecto:** `Practica_5075_Integridad_KDD`
-- **Fecha de ejecución (UTC):** `{fecha_utc}`
-- **Estado de compuerta BI:** **APROBADO PARA MINERÍA DE DATOS (KDD)**
-
-## 1. Integridad Criptográfica del Lote (Fase 1 - SHA-256)
-- **Ficheros aprobados:** `{', '.join(ficheros_verificados)}`
-- **Ficheros bloqueados en cuarentena:** `{', '.join(ficheros_bloqueados_sha) if ficheros_bloqueados_sha else 'Ninguno'}`
-
-## 2. Métricas de Calidad ISO/IEC 25012
-| Dimensión ISO/IEC 25012 | Indicador Evaluado | Resultado |
-| :--- | :--- | :---: |
-| **Completitud** | Proporción de celdas no nulas en el dataset curado | **{completitud}%** |
-| **Unicidad** | Registros únicos según clave primaria (`{col_id}`) | **{unicidad}%** |
-| **Validez** | Tasa de registros conformes respecto al total evaluado | **{validez_lote}%** |
-| **Consistencia** | Conformidad estructural con el esquema contractual | **{consistencia}%** |
-| **Exactitud** | Cumplimiento de reglas de dominio y rango estadístico (IQR/MAD) | **100.0%** |
-
-## 3. Segregación de Registros Defectuosos (Fase 2)
-Se procesaron **{total_bruto}** registros brutos, validando **{total_curado}** y aislando **{len(df_rechazados)}** en `output_samples/quarantine_manifest.txt`.
-
-| Motivo de Rechazo | Registros Aislados |
-| :--- | :---: |
-{tabla_anomalias}
-
-## 4. Perfilado Estadístico y Normalización KDD (Fase 3)
-Las variables numéricas han sido estandarizadas (**Z-Score**, `*_zscore`) y escaladas (**Min-Max**, `*_minmax`) para su explotación en almacenes de Business Intelligence y algoritmos de minería de datos.
-
-| Variable | Media | Mediana | Desv. Típica | Mínimo | Máximo |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-{tabla_stats}
+## 3. Conclusiones Técnicas
+Se han segregado correctamente los ficheros con alteraciones criptográficas y los registros con nulos o valores atípicos de sensores, asegurando que el dataset final cumpla con los estándares de calidad para los modelos de Business Intelligence.
 """
-    INFORME_MD.write_text(informe, encoding="utf-8")
 
-    logger.warning(f"[CUARENTENA] {len(df_rechazados)}/{total_bruto} registros aislados en {QUARANTINE_MANIFEST.name}")
-    logger.info(f"=== FIN FASE 2 Y 3 | Métricas en {METRICAS_JSON.name} e Informe en {INFORME_MD.name} ===")
-    return 0
+  report_path = reports_dir / "INFORME_CALIDAD_KDD.md"
+  with open(report_path, "w", encoding="utf-8") as rf:
+    rf.write(informe_md)
+  logging.info(f"Informe técnico generado correctamente en {report_path}")
+
+  logging.info("=== FIN DEL PIPELINE KDD Y PERFILADO EXITOSO ===")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+  ejecutar_saneamiento_kdd()

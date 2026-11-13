@@ -1,21 +1,14 @@
-networks:
-  bigdata-net:
-    driver: bridge
-
 services:
-  kdd-python:
-    image: python:3.11-slim
-    container_name: kdd-lab
-    hostname: kdd-lab
-    working_dir: /workspace/Practica_5075_Integridad_KDD
-    networks:
-      - bigdata-net
+  pipeline_kdd:
+    build: .
+    container_name: bda_pipeline_kdd_container
     volumes:
-      - ./Practica_5075_Integridad_KDD:/workspace/Practica_5075_Integridad_KDD
-      - ./raw_batch_202611:/workspace/raw_batch_202611:ro
-    stdin_open: true
-    tty: true
-    command: >
-      bash -c "pip install --no-cache-dir pandas numpy &&
-      echo '[OK] Entorno Python 3.11 + Pandas/NumPy listo en /workspace/Practica_5075_Integridad_KDD' &&
-      sleep infinity"
+      # Sincronizamos las carpetas locales con el contenedor para ver los logs,
+      # informes y datasets generados directamente en tu máquina anfitriona.
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+      - ./output_samples:/app/output_samples
+      - ./processed:/app/processed
+      - ./staging:/app/staging
+      - ./quarantine:/app/quarantine
+    command: sh -c "python scripts/01_verificar_integridad.py && python scripts/02_pipeline_saneamiento.py"

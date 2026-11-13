@@ -1,0 +1,10 @@
+{
+    "total_registros_brutos": 100,
+    "total_registros_limpios": 92,
+    "tasa_completitud_porcentaje": 92.0,
+    "importe_media": 158.8725,
+    "importe_mediana": 73.57499999999999,
+    "importe_std": 523.2249396793626,
+    "importe_p25": 54.1375,
+    "importe_p75": 87.685
+}
