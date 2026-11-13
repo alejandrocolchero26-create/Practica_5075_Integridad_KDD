@@ -42,14 +42,14 @@ def ejecutar_saneamiento_kdd():
       f"Registros totales cargados desde staging: {total_registros_iniciales}"
   )
 
-  # 1. Identificación y segregación de nulos críticos (id_transaccion)
+  # Identificación y segregación de nulos críticos (id_transaccion)
   mask_nulos_id = df_raw["id_transaccion"].isnull()
   bad_id_df = df_raw[mask_nulos_id]
   bad_id_df.to_csv(bad_records_dir / "bad_records_nulos_id.csv", index=False)
 
   df_clean = df_raw.dropna(subset=["id_transaccion"]).copy()
 
-  # 2. Coherencia temporal (ISO 8601)
+  # Coherencia temporal (ISO 8601)
   df_clean["timestamp"] = pd.to_datetime(
       df_clean["timestamp"], errors="coerce"
   )
@@ -61,7 +61,7 @@ def ejecutar_saneamiento_kdd():
       "%Y-%m-%d %H:%M:%S"
   )
 
-  # 3. Coerción numérica y reglas de dominio
+  # Coerción numérica y reglas de dominio
   df_clean["importe_eur"] = pd.to_numeric(
       df_clean["importe_eur"], errors="coerce"
   )
@@ -94,7 +94,7 @@ def ejecutar_saneamiento_kdd():
       f" {registros_finales} registros."
   )
 
-  # 5. Perfilado de Datos ISO/IEC 25012
+  # Perfilado de Datos ISO/IEC 25012
   completitud_tasa = (
       (registros_finales / total_registros_iniciales) * 100
       if total_registros_iniciales > 0
@@ -121,7 +121,7 @@ def ejecutar_saneamiento_kdd():
     json.dump(metricas, jf, indent=4)
   logging.info(f"Métricas de perfilado exportadas correctamente a {json_path}")
 
-  # 6. Redacción del informe técnico en reports/INFORME_CALIDAD_KDD.md
+  # Redacción del informe técnico en reports/INFORME_CALIDAD_KDD.md
   informe_md = f"""# Informe de Calidad de Datos y Preparación KDD (ISO/IEC 25012)
 
 ## 1. Resumen Ejecutivo
